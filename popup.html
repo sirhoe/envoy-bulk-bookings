@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Envoy Bulk Booking</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="container">
+
+    <!-- Header -->
+    <div class="header">
+      <svg class="header-icon" width="22" height="22" viewBox="0 0 22 22" fill="none">
+        <rect width="22" height="22" rx="5" fill="#4F46E5"/>
+        <path d="M5 11h12M11 5v12" stroke="white" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <span class="header-title">Envoy Bulk Booking</span>
+      <span id="status-badge" class="badge badge-idle">Idle</span>
+    </div>
+
+    <!-- Day selector -->
+    <div class="day-selector">
+      <button class="day-chip active" data-day="1">Mon</button>
+      <button class="day-chip active" data-day="2">Tue</button>
+      <button class="day-chip active" data-day="3">Wed</button>
+      <button class="day-chip active" data-day="4">Thu</button>
+      <button class="day-chip active" data-day="5">Fri</button>
+    </div>
+
+    <!-- Main controls -->
+    <div class="controls">
+      <div id="status-msg" class="status-msg hidden"></div>
+
+      <div id="progress-wrap" class="progress-wrap hidden">
+        <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+        <span id="progress-label" class="progress-label">0 / 0</span>
+      </div>
+
+      <button id="book-btn" class="btn-primary">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        Book All Desks
+      </button>
+    </div>
+
+    <!-- Booking summary (shown after done) -->
+    <div id="summary-section" class="summary-section hidden">
+      <div class="summary-header">Booking Summary</div>
+      <div id="summary-body" class="summary-body"></div>
+    </div>
+
+    <!-- Debug log -->
+    <div class="log-section">
+      <div class="log-header">
+        <span class="log-title">Debug Log</span>
+        <button id="clear-log-btn" class="btn-link">Clear</button>
+      </div>
+      <div id="log-body" class="log-body">
+        <span class="log-empty">No activity yet.</span>
+      </div>
+    </div>
+
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
