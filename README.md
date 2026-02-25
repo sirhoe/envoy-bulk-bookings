@@ -2,9 +2,8 @@
 
 A Chrome extension that books all your desks on [Envoy](https://dashboard.envoy.com) for the week with a single click — no manual scheduling required.
 
-![Envoy Bulk Booking popup](docs/screenshot.png)
+<img src="docs/screenshot.png" alt="Envoy Bulk Booking popup" width="400" />
 
-> **Note:** A screenshot placeholder is referenced above. Add your own screenshot to `docs/screenshot.png` to display it.
 
 ---
 
