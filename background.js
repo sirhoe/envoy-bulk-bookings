@@ -21,11 +21,11 @@ function getTodayString() {
 
 function scheduleNextAlarm() {
   const now = new Date();
-  const next8am = new Date(now);
-  next8am.setHours(8, 0, 0, 0);
-  if (now >= next8am) next8am.setDate(next8am.getDate() + 1);
+  const next11am = new Date(now);
+  next11am.setHours(11, 0, 0, 0);
+  if (now >= next11am) next11am.setDate(next11am.getDate() + 1);
   chrome.alarms.create('dailyBooking', {
-    when: next8am.getTime(),
+    when: next11am.getTime(),
     periodInMinutes: 1440,
   });
 }
@@ -256,7 +256,7 @@ chrome.runtime.onInstalled.addListener(() => scheduleNextAlarm());
 chrome.runtime.onStartup.addListener(async () => {
   scheduleNextAlarm();
   const now = new Date();
-  if (now.getHours() >= 8) {
+  if (now.getHours() >= 11) {
     const { lastRunDate, selectedDays } = await chrome.storage.local.get(['lastRunDate', 'selectedDays']);
     if (lastRunDate !== getTodayString()) {
       await runBooking(selectedDays || [1, 2, 3, 4, 5]);

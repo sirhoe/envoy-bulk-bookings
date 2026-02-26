@@ -11,6 +11,12 @@ A Chrome extension that books all your desks on [Envoy](https://dashboard.envoy.
 
 The extension opens the Envoy schedule page in a background tab, finds every available **Schedule** / **Book Desk** button, and clicks each one in sequence — including handling any confirmation modals. Progress is shown live in the popup with a booking summary when complete.
 
+It can run both manually and automatically:
+
+- **Manual run:** from the popup when you click **Book All Desks**.
+- **Automatic daily run:** at **11:00 AM local time** via a Chrome alarm.
+- **Startup catch-up run:** when Chrome starts **after 11:00 AM**, it runs once for the day if it has not already run.
+
 ---
 
 ## Assumptions
