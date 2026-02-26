@@ -57,7 +57,8 @@ Chrome extensions can be loaded directly from source without publishing to the C
 3. Select which days of the week you want to book (Mon–Fri are all active by default).
 4. Click **Book All Desks**.
 5. The extension opens the Envoy schedule page in a background tab, books each available desk, and closes the tab when done.
-6. A **Booking Summary** table and a **Debug Log** are shown in the popup once the run completes.
+6. A **desktop notification** appears when the run finishes (success, nothing to book, or error).
+7. A **Booking Summary** table and a **Debug Log** are shown in the popup once the run completes.
 
 ---
 
@@ -68,6 +69,7 @@ Chrome extensions can be loaded directly from source without publishing to the C
 | `activeTab` | Communicate with the currently active Envoy tab |
 | `tabs` | Open a background tab to the schedule page and close it when done |
 | `storage` | Persist your day-of-week selection and live booking state across popup opens |
+| `notifications` | Show a desktop notification when booking completes, fails, or finds nothing to book |
 | `host_permissions: https://dashboard.envoy.com/*` | Inject the content script that finds and clicks the Schedule buttons |
 
 No data ever leaves your browser. The extension communicates only with `dashboard.envoy.com`.
@@ -82,6 +84,7 @@ No data ever leaves your browser. The extension communicates only with `dashboar
 | "No Schedule buttons found" warning | Desks are already booked, or the page layout changed | Check the Envoy schedule page manually; the extension logs the buttons it finds |
 | Booking stops part-way through | A modal appeared that the extension couldn't auto-dismiss | Check the Debug Log for details; report the modal text as a GitHub issue |
 | Extension not visible in toolbar | Not pinned | Go to `chrome://extensions`, find the extension, and ensure it is enabled |
+| Desktop notification doesn't appear | Windows Do Not Disturb is on, or Chrome is blocked in Windows notification settings | Check Settings → System → Notifications: turn off Do not disturb and ensure Google Chrome is enabled in the app list |
 
 ---
 
