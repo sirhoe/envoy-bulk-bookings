@@ -148,6 +148,10 @@ bookBtn.addEventListener('click', async () => {
   }
 });
 
+document.getElementById('settings-btn').addEventListener('click', () => {
+  chrome.runtime.openOptionsPage();
+});
+
 clearLogBtn.addEventListener('click', async () => {
   const data = await chrome.storage.session.get('envoy_booking');
   const prev = data.envoy_booking || {};

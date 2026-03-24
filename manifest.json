@@ -3,10 +3,14 @@
   "name": "Envoy Bulk Desk Booking",
   "version": "1.1.0",
   "description": "Bulk schedule desks on Envoy dashboard headlessly with one click",
-  "permissions": ["activeTab", "tabs", "storage", "alarms", "notifications"],
+  "permissions": ["activeTab", "tabs", "storage", "alarms", "notifications", "scripting"],
   "host_permissions": ["https://dashboard.envoy.com/*"],
   "background": {
     "service_worker": "background.js"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
   },
   "action": {
     "default_popup": "popup.html",

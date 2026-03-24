@@ -10,8 +10,12 @@
  *  5. Closes the background tab when done (or on error)
  */
 
-const SCHEDULE_URL   = 'https://dashboard.envoy.com/schedule';
-const TAB_LOAD_TIMEOUT = 20_000; // ms to wait for the tab to reach "complete"
+const SCHEDULE_URL        = 'https://dashboard.envoy.com/schedule';
+const TAB_LOAD_TIMEOUT    = 20_000; // ms to wait for the tab to reach "complete"
+const SSO_REDIRECT_TIMEOUT = 30_000; // ms to wait for corporate SSO redirect to complete
+const SSO_SETTLE_DELAY     = 1_500;  // ms extra pause after SSO for SPA to stabilise
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* ── Daily scheduling helpers ────────────────────────────────────────── */
 
@@ -75,6 +79,69 @@ async function addLog(level, msg) {
   const prev = await getState();
   const log  = [...(prev.log || []), entry];
   await chrome.storage.session.set({ envoy_booking: { ...prev, log } });
+}
+
+/* ── Login helpers ───────────────────────────────────────────────────── */
+
+function isLoginUrl(url) {
+  return url.includes('/login') || url.includes('/sign-in') || url.includes('/auth');
+}
+
+function fillEmailAndSubmit(email) {
+  const selectors = ['input[type="email"]', 'input[name="email"]', 'input[id*="email"]', 'input[placeholder*="email" i]'];
+  let field = null;
+  for (const s of selectors) { field = document.querySelector(s); if (field) break; }
+  if (!field) return 'no_email_field';
+
+  // React-compatible value injection
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  setter.call(field, email);
+  field.dispatchEvent(new Event('input', { bubbles: true }));
+  field.dispatchEvent(new Event('change', { bubbles: true }));
+
+  const btnSelectors = ['button[type="submit"]', 'button[data-test*="continue"]', 'button[data-test*="submit"]', 'input[type="submit"]'];
+  let btn = null;
+  for (const s of btnSelectors) { btn = document.querySelector(s); if (btn && !btn.disabled) break; }
+  const form = field.closest('form');
+  if (!btn) {
+    btn = form ? Array.from(form.querySelectorAll('button')).find((b) => !b.disabled) : null;
+  }
+  if (btn) { btn.click(); return 'submitted'; }
+
+  if (form) { form.submit(); return 'form_submitted'; }
+  return 'no_submit_button';
+}
+
+async function attemptAutoLogin(tabId) {
+  const { envoyEmail } = await chrome.storage.local.get('envoyEmail');
+
+  if (!envoyEmail) {
+    throw new Error('Redirected to login page. Open Settings (gear icon) and save your Envoy email to enable auto-login.');
+  }
+
+  await addLog('info', `Auto-login: submitting email ${envoyEmail}…`);
+
+  const result = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: fillEmailAndSubmit,
+    args: [envoyEmail],
+  });
+
+  if (result[0]?.result === 'no_email_field') {
+    throw new Error('Auto-login failed: email field not found. The Envoy login form may have changed.');
+  }
+
+  // Wait for SSO redirect — corporate IdP auth completes automatically via browser cookies
+  await addLog('info', 'Auto-login: waiting for SSO redirect to complete…');
+  await waitForTabComplete(tabId, SSO_REDIRECT_TIMEOUT).catch(() => {});
+  await sleep(SSO_SETTLE_DELAY);
+
+  const tab = await chrome.tabs.get(tabId);
+  if (isLoginUrl(tab.url)) {
+    throw new Error('Auto-login failed: still on login page after SSO redirect. Ensure you are signed in to your corporate identity provider in Chrome.');
+  }
+
+  await addLog('success', 'Auto-login: SSO login succeeded.');
 }
 
 /* ── Tab helpers ─────────────────────────────────────────────────────── */
@@ -145,8 +212,11 @@ async function runBooking(selectedDays = [1, 2, 3, 4, 5]) {
     if (!loaded.url.includes('dashboard.envoy.com')) {
       throw new Error('Redirected away from Envoy — are you logged in?');
     }
-    if (loaded.url.includes('/login') || loaded.url.includes('/sign-in') || loaded.url.includes('/auth')) {
-      throw new Error('Redirected to login page — please sign in to Envoy in Chrome first.');
+    if (isLoginUrl(loaded.url)) {
+      await attemptAutoLogin(tab.id);
+      // After SSO, Envoy may land on dashboard root — navigate back to schedule
+      await chrome.tabs.update(tab.id, { url: SCHEDULE_URL });
+      await waitForTabComplete(tab.id, TAB_LOAD_TIMEOUT);
     }
   } catch (err) {
     await setState({ status: 'error' });
@@ -156,8 +226,7 @@ async function runBooking(selectedDays = [1, 2, 3, 4, 5]) {
     return;
   }
 
-  // Small extra pause for the SPA to finish rendering
-  await new Promise((r) => setTimeout(r, 1500));
+  await sleep(SSO_SETTLE_DELAY); // extra pause for the SPA to finish rendering
 
   // Kick off the content script
   await addLog('info', 'Sending booking command to page…');

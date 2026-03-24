@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Envoy Bulk Booking — Settings</title>
+  <link rel="stylesheet" href="popup.css" />
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <div class="container">
+
+    <div class="header">
+      <svg class="header-icon" width="22" height="22" viewBox="0 0 22 22" fill="none">
+        <rect width="22" height="22" rx="5" fill="#4F46E5"/>
+        <path d="M5 11h12M11 5v12" stroke="white" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <span class="header-title">Settings</span>
+    </div>
+
+    <div class="options-body">
+      <div class="options-section">
+        <div class="options-section-title">Envoy Credentials</div>
+        <p class="options-hint">
+          Your corporate email is used for automatic SSO login when the extension
+          detects a redirect to the Envoy sign-in page.
+        </p>
+        <p class="options-warning">
+          Stored in plain text in Chrome's local extension storage.
+          Do not use this on a shared or managed computer.
+        </p>
+
+        <div class="field-group">
+          <label class="field-label" for="email">Corporate Email</label>
+          <input id="email" type="email" class="field-input"
+                 placeholder="you@company.com" autocomplete="email" />
+        </div>
+
+        <div id="save-msg" class="status-msg hidden"></div>
+
+        <button id="save-btn" class="btn-primary" type="button">Save</button>
+      </div>
+    </div>
+
+  </div>
+  <script src="options.js"></script>
+</body>
+</html>
