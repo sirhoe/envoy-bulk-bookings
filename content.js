@@ -198,21 +198,29 @@ async function runBulkBooking(selectedDays = [1, 2, 3, 4, 5]) {
 
   await log('info', `${filteredButtons.length} button(s) after day filter.`);
 
+  const totalToBook = filteredButtons.length;
   let booked = 0;
   const bookings = [];
 
-  for (let i = 0; i < filteredButtons.length; i++) {
-    const btn = filteredButtons[i];
+  for (let attempt = 0; attempt < totalToBook; attempt++) {
+    // Re-query fresh buttons each iteration — React re-renders the list after each click,
+    // which detaches the previously collected button references from the DOM.
+    const freshButtons = findScheduleButtons().filter((btn) => {
+      if (!selectedDays || selectedDays.length === 0) return true;
+      const day = getButtonDayOfWeek(btn);
+      return day === null || selectedDays.includes(day);
+    });
 
-    if (btn.disabled || !document.contains(btn)) {
-      await log('warn', `Button ${i + 1} is no longer available — skipping.`);
-      continue;
+    if (freshButtons.length === 0) {
+      await log('warn', 'No more Schedule buttons found — stopping early.');
+      break;
     }
 
+    const btn = freshButtons[0];
     const dateLabel = getButtonDateLabel(btn);
     const label = dateLabel ? ` ("${dateLabel}")` : '';
 
-    await log('info', `Clicking button ${i + 1}/${filteredButtons.length}${label}`);
+    await log('info', `Clicking button ${attempt + 1}/${totalToBook}${label}`);
 
     btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
     await sleep(300);
@@ -223,7 +231,7 @@ async function runBulkBooking(selectedDays = [1, 2, 3, 4, 5]) {
       await chrome.runtime.sendMessage({
         type: 'BOOKING_PROGRESS',
         current: booked,
-        total: filteredButtons.length,
+        total: totalToBook,
       });
     } catch { /* background SW may have cycled */ }
 
@@ -233,7 +241,7 @@ async function runBulkBooking(selectedDays = [1, 2, 3, 4, 5]) {
     const desk = await captureAssignedDesk(container);
     bookings.push({ date: dateLabel || `Booking ${booked}`, desk });
 
-    if (i < filteredButtons.length - 1) {
+    if (attempt < totalToBook - 1) {
       await sleep(DELAY_BETWEEN_CLICKS);
     }
   }
