@@ -14,6 +14,7 @@ const SCHEDULE_URL        = 'https://dashboard.envoy.com/schedule';
 const TAB_LOAD_TIMEOUT    = 20_000; // ms to wait for the tab to reach "complete"
 const SSO_REDIRECT_TIMEOUT = 30_000; // ms to wait for corporate SSO redirect to complete
 const SSO_SETTLE_DELAY     = 1_500;  // ms extra pause after SSO for SPA to stabilise
+const SSO_REDIRECT_SETTLE  = 10_000; // ms to wait after SSO redirect before checking login
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -134,7 +135,7 @@ async function attemptAutoLogin(tabId) {
   // Wait for SSO redirect — corporate IdP auth completes automatically via browser cookies
   await addLog('info', 'Auto-login: waiting for SSO redirect to complete…');
   await waitForTabComplete(tabId, SSO_REDIRECT_TIMEOUT).catch(() => {});
-  await sleep(SSO_SETTLE_DELAY);
+  await sleep(SSO_REDIRECT_SETTLE);
 
   const tab = await chrome.tabs.get(tabId);
   if (isLoginUrl(tab.url)) {

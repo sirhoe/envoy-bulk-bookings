@@ -14,7 +14,7 @@ saveBtn.addEventListener('click', async () => {
     return;
   }
   await chrome.storage.local.set({ envoyEmail: email });
-  showMsg('success', 'Saved.');
+  window.close();
 });
 
 function showMsg(type, text) {
