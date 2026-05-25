@@ -11,10 +11,14 @@
  */
 
 const SCHEDULE_URL        = 'https://dashboard.envoy.com/schedule';
-const TAB_LOAD_TIMEOUT    = 20_000; // ms to wait for the tab to reach "complete"
-const SSO_REDIRECT_TIMEOUT = 30_000; // ms to wait for corporate SSO redirect to complete
-const SSO_SETTLE_DELAY     = 1_500;  // ms extra pause after SSO for SPA to stabilise
-const SSO_REDIRECT_SETTLE  = 10_000; // ms to wait after SSO redirect before checking login
+const MAP_BASE_URL        = 'https://dashboard.envoy.com/spaces/maps/live';
+const MAP_DEFAULT_LOC_ID  = '124269';
+const TAB_LOAD_TIMEOUT    = 20_000;
+const SSO_REDIRECT_TIMEOUT = 30_000;
+const SSO_SETTLE_DELAY     = 1_500;
+const SSO_REDIRECT_SETTLE  = 10_000;
+const MAP_SEAT_TIMEOUT    = 35_000; // ms to wait for resolveFeatureId
+const MAP_BOOKING_TIMEOUT = 30_000; // ms to wait for bookSeatOnCurrentPage
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -172,8 +176,165 @@ async function closeTab(tabId) {
 
 /* ── Main booking flow ───────────────────────────────────────────────── */
 
-let activeTabId = null;      // guard against concurrent runs
-let pendingSelectedDays = [1, 2, 3, 4, 5]; // forwarded to content script
+let activeTabId = null;
+let pendingSelectedDays = [1, 2, 3, 4, 5];
+
+// Resolver slot for async replies from content script (SEAT_RESULT)
+let seatResultResolver = null;
+
+function waitForSeatResult(timeout) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      seatResultResolver = null;
+      reject(new Error('Timed out waiting for seat result'));
+    }, timeout);
+    seatResultResolver = (msg) => {
+      clearTimeout(timer);
+      resolve(msg);
+    };
+  });
+}
+
+/* ── Map booking helpers ─────────────────────────────────────────────── */
+
+function getTargetDates(selectedDays) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const windowEnd = new Date(today);
+  windowEnd.setDate(today.getDate() + 30);
+
+  const dates = [];
+  const cursor = new Date(today);
+  while (cursor <= windowEnd) {
+    if (selectedDays.includes(cursor.getDay())) {
+      dates.push(new Date(cursor));
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates; // already ascending
+}
+
+function getDayTimestamps(date) {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(date);
+  end.setHours(23, 59, 0, 0);
+  return {
+    selectedTime: Math.floor(start.getTime() / 1000),
+    selectedEndTime: Math.floor(end.getTime() / 1000),
+  };
+}
+
+function formatDate(date) {
+  return date.toLocaleDateString('en-AU', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+async function runMapFlow(selectedDays, preferredSeat, cachedFeatureId, locationId) {
+  await addLog('info', `Map booking: seat "${preferredSeat}" for ${selectedDays.length} selected day(s).`);
+
+  const dates = getTargetDates(selectedDays);
+  if (dates.length === 0) {
+    await setState({ status: 'done', total: 0, current: 0 });
+    await addLog('warn', 'No upcoming dates match the selected days.');
+    showBookingNotification('done', 0);
+    return;
+  }
+
+  // Open map page for first target date
+  const { selectedTime: t0, selectedEndTime: e0 } = getDayTimestamps(dates[0]);
+  const initialUrl = `${MAP_BASE_URL}/${locationId}?selectedTime=${t0}&selectedEndTime=${e0}`;
+
+  let tab;
+  try {
+    tab = await chrome.tabs.create({ url: initialUrl, active: false });
+    activeTabId = tab.id;
+    await addLog('info', `Background tab created (id=${tab.id}).`);
+    await waitForTabComplete(tab.id, TAB_LOAD_TIMEOUT);
+
+    const loaded = await chrome.tabs.get(tab.id);
+    await addLog('info', `Page loaded. URL: ${loaded.url}`);
+
+    if (!loaded.url.includes('dashboard.envoy.com')) {
+      throw new Error('Redirected away from Envoy — are you logged in?');
+    }
+    if (isLoginUrl(loaded.url)) {
+      await attemptAutoLogin(tab.id);
+      await chrome.tabs.update(tab.id, { url: initialUrl });
+      await waitForTabComplete(tab.id, TAB_LOAD_TIMEOUT);
+    }
+  } catch (err) {
+    await setState({ status: 'error' });
+    await addLog('error', err.message);
+    if (activeTabId) { await closeTab(activeTabId); activeTabId = null; }
+    return;
+  }
+
+  await sleep(SSO_SETTLE_DELAY);
+
+  // Resolve feature ID if not cached
+  let seatFeatureId = cachedFeatureId;
+  if (!seatFeatureId) {
+    await addLog('info', `Looking up feature ID for "${preferredSeat}" via map search…`);
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: 'RESOLVE_SEAT', seatName: preferredSeat });
+      const result = await waitForSeatResult(MAP_SEAT_TIMEOUT);
+      if (result.error) throw new Error(result.error);
+      seatFeatureId = result.featureId;
+      await chrome.storage.local.set({ seatFeatureId });
+      await addLog('info', `Feature ID for "${preferredSeat}": ${seatFeatureId}`);
+    } catch (err) {
+      await setState({ status: 'error' });
+      await addLog('error', `Could not find seat "${preferredSeat}": ${err.message}`);
+      await closeTab(activeTabId);
+      activeTabId = null;
+      showBookingNotification('error', 0, `Seat "${preferredSeat}" not found on map`);
+      return;
+    }
+  }
+
+  await setState({ status: 'running', total: dates.length, current: 0 });
+  let booked = 0;
+
+  for (let i = 0; i < dates.length; i++) {
+    const date = dates[i];
+    const { selectedTime, selectedEndTime } = getDayTimestamps(date);
+    const mapUrl = `${MAP_BASE_URL}/${locationId}?selectedTime=${selectedTime}&selectedEndTime=${selectedEndTime}&selectedFeatureId=${seatFeatureId}`;
+    const dateStr = formatDate(date);
+
+    await addLog('info', `[${dateStr}] Navigating to map page…`);
+    try {
+      await chrome.tabs.update(activeTabId, { url: mapUrl });
+      await waitForTabComplete(activeTabId, TAB_LOAD_TIMEOUT);
+      await sleep(2500); // let Leaflet finish rendering markers
+
+      await chrome.tabs.sendMessage(activeTabId, {
+        type: 'BOOK_SEAT',
+        featureId: seatFeatureId,
+        seatName: preferredSeat,
+        dateStr,
+      });
+
+      const result = await waitForSeatResult(MAP_BOOKING_TIMEOUT);
+      if (result.ok) {
+        booked++;
+        await addLog('success', `[${dateStr}] Booked "${preferredSeat}".`);
+      } else {
+        await addLog('error', `[${dateStr}] ${result.error}`);
+      }
+    } catch (err) {
+      await addLog('error', `[${dateStr}] ${err.message}`);
+    }
+
+    await setState({ current: i + 1 });
+  }
+
+  await setState({ status: 'done', current: dates.length, total: dates.length });
+  await addLog('success', `Done — ${booked}/${dates.length} day(s) booked for "${preferredSeat}".`);
+  if (activeTabId) { await closeTab(activeTabId); activeTabId = null; }
+  await chrome.storage.local.set({ lastRunDate: getTodayString() });
+  showBookingNotification('done', booked);
+}
 
 async function runBooking(selectedDays = [1, 2, 3, 4, 5]) {
   pendingSelectedDays = selectedDays;
@@ -185,6 +346,19 @@ async function runBooking(selectedDays = [1, 2, 3, 4, 5]) {
   await chrome.storage.session.set({
     envoy_booking: { ...defaultState(), status: 'running', log: [] },
   });
+
+  // Branch: map flow vs schedule flow
+  const {
+    bookingMode    = 'auto',
+    preferredSeat  = '',
+    seatFeatureId  = '',
+    mapLocationId  = MAP_DEFAULT_LOC_ID,
+  } = await chrome.storage.local.get(['bookingMode', 'preferredSeat', 'seatFeatureId', 'mapLocationId']);
+
+  if (bookingMode === 'map' && preferredSeat) {
+    await runMapFlow(selectedDays, preferredSeat, seatFeatureId, mapLocationId);
+    return;
+  }
 
   await addLog('info', 'Opening Envoy schedule page in background tab…');
 
@@ -304,6 +478,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         await chrome.storage.local.set({ lastRunDate: getTodayString() });
         showBookingNotification('error', 0, message.message || 'An unexpected error occurred.');
+        sendResponse({ ok: true });
+        break;
+      }
+
+      case 'SEAT_RESULT': {
+        // Content script reporting outcome of RESOLVE_SEAT or BOOK_SEAT
+        if (seatResultResolver) {
+          seatResultResolver(message);
+          seatResultResolver = null;
+        }
+        sendResponse({ ok: true });
+        break;
+      }
+
+      case 'CACHE_FEATURE_ID': {
+        await chrome.storage.local.set({ seatFeatureId: message.featureId });
         sendResponse({ ok: true });
         break;
       }

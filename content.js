@@ -146,6 +146,29 @@ async function captureAssignedDesk(container) {
   return m ? m[0].trim() : 'Booked';
 }
 
+/* ── Week navigation ─────────────────────────────────────────────────── */
+
+const NEXT_WEEK_SELECTORS = [
+  'button[aria-label="Next week"]',
+  'button[aria-label="next week"]',
+  'button[aria-label="Next"]',
+  '[data-test="next-week"]',
+  '[data-test*="next"]',
+  'button[title="Next week"]',
+  'button[title="Next"]',
+];
+
+function findNextWeekButton() {
+  for (const sel of NEXT_WEEK_SELECTORS) {
+    const el = document.querySelector(sel);
+    if (el && !el.disabled) return el;
+  }
+  // Fallback: last icon-only button (SVG, no text) — typically the "›" chevron
+  const iconOnly = Array.from(document.querySelectorAll('button'))
+    .filter((b) => b.textContent.trim() === '' && b.querySelector('svg'));
+  return iconOnly.length >= 1 ? iconOnly[iconOnly.length - 1] : null;
+}
+
 /* ── Main booking routine ────────────────────────────────────────────── */
 
 async function runBulkBooking(selectedDays = [1, 2, 3, 4, 5]) {
@@ -158,114 +181,261 @@ async function runBulkBooking(selectedDays = [1, 2, 3, 4, 5]) {
     await sleep(3000); // wait for navigation
   }
 
-  const buttons = await waitForScheduleButtons();
+  const MAX_WEEKS = 4;
+  let totalBooked = 0;
+  const allBookings = [];
 
-  if (!buttons) {
-    await log('warn', 'No Schedule buttons found after waiting. The page may require login or the desks may already be booked.');
-    await chrome.runtime.sendMessage({
-      type: 'BOOKING_NONE',
-      message: 'No Schedule buttons found. Ensure you\'re logged in and desks are available.',
-    });
-    return;
-  }
+  for (let week = 0; week < MAX_WEEKS; week++) {
+    const buttons = await waitForScheduleButtons();
 
-  await log('info', `Found ${buttons.length} Schedule button(s). Filtering by selected days: [${selectedDays.join(',')}]`);
-
-  // Filter buttons by day of week
-  const filteredButtons = buttons.filter((btn, i) => {
-    if (!selectedDays || selectedDays.length === 0) return true;
-    const day = getButtonDayOfWeek(btn);
-    if (day === null) {
-      // Can't determine day — include it
-      return true;
-    }
-    if (!selectedDays.includes(day)) {
-      const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-      log('info', `Skipping button ${i + 1} — day ${DAY_NAMES[day]} not in selected days`);
-      return false;
-    }
-    return true;
-  });
-
-  if (filteredButtons.length === 0) {
-    await log('warn', 'No buttons remain after day-of-week filter.');
-    await chrome.runtime.sendMessage({
-      type: 'BOOKING_NONE',
-      message: 'No Schedule buttons matched the selected days.',
-    });
-    return;
-  }
-
-  await log('info', `${filteredButtons.length} button(s) after day filter.`);
-
-  const totalToBook = filteredButtons.length;
-  let booked = 0;
-  const bookings = [];
-
-  for (let attempt = 0; attempt < totalToBook; attempt++) {
-    // Re-query fresh buttons each iteration — React re-renders the list after each click,
-    // which detaches the previously collected button references from the DOM.
-    const freshButtons = findScheduleButtons().filter((btn) => {
-      if (!selectedDays || selectedDays.length === 0) return true;
-      const day = getButtonDayOfWeek(btn);
-      return day === null || selectedDays.includes(day);
-    });
-
-    if (freshButtons.length === 0) {
-      await log('warn', 'No more Schedule buttons found — stopping early.');
+    if (!buttons) {
+      if (week === 0) {
+        await log('warn', 'No Schedule buttons found after waiting. The page may require login or the desks may already be booked.');
+        await chrome.runtime.sendMessage({
+          type: 'BOOKING_NONE',
+          message: 'No Schedule buttons found. Ensure you\'re logged in and desks are available.',
+        });
+        return;
+      }
+      await log('info', `Week ${week + 1}: no buttons found — stopping.`);
       break;
     }
 
-    const btn = freshButtons[0];
-    const dateLabel = getButtonDateLabel(btn);
-    const label = dateLabel ? ` ("${dateLabel}")` : '';
+    await log('info', `Week ${week + 1}/${MAX_WEEKS}: ${buttons.length} button(s). Filtering for days [${selectedDays.join(',')}]`);
 
-    await log('info', `Clicking button ${attempt + 1}/${totalToBook}${label}`);
+    const filtered = buttons.filter((btn, i) => {
+      if (!selectedDays || selectedDays.length === 0) return true;
+      const day = getButtonDayOfWeek(btn);
+      if (day === null) return true;
+      if (!selectedDays.includes(day)) {
+        const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+        log('info', `Skipping button ${i + 1} — day ${DAY_NAMES[day]} not in selected days`);
+        return false;
+      }
+      return true;
+    });
 
-    btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    await sleep(300);
-    btn.click();
-    booked++;
+    if (filtered.length > 0) {
+      for (let attempt = 0; attempt < filtered.length; attempt++) {
+        // Re-query each iteration — React re-renders detach previous refs
+        const fresh = findScheduleButtons().filter((b) => {
+          if (!selectedDays || selectedDays.length === 0) return true;
+          const day = getButtonDayOfWeek(b);
+          return day === null || selectedDays.includes(day);
+        });
 
-    try {
-      await chrome.runtime.sendMessage({
-        type: 'BOOKING_PROGRESS',
-        current: booked,
-        total: totalToBook,
-      });
-    } catch { /* background SW may have cycled */ }
+        if (fresh.length === 0) {
+          await log('warn', 'No more Schedule buttons found — stopping early.');
+          break;
+        }
 
-    await handleConfirmationModal();
+        const btn = fresh[0];
+        const dateLabel = getButtonDateLabel(btn);
+        const label = dateLabel ? ` ("${dateLabel}")` : '';
 
-    const container = getButtonContainer(btn);
-    const desk = await captureAssignedDesk(container);
-    bookings.push({ date: dateLabel || `Booking ${booked}`, desk });
+        await log('info', `Week ${week + 1} — clicking ${attempt + 1}/${filtered.length}${label}`);
 
-    if (attempt < totalToBook - 1) {
-      await sleep(DELAY_BETWEEN_CLICKS);
+        btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        await sleep(300);
+        btn.click();
+        totalBooked++;
+
+        try {
+          await chrome.runtime.sendMessage({
+            type: 'BOOKING_PROGRESS',
+            current: totalBooked,
+            total: totalBooked,
+          });
+        } catch { /* background SW may have cycled */ }
+
+        await handleConfirmationModal();
+
+        const container = getButtonContainer(btn);
+        const desk = await captureAssignedDesk(container);
+        allBookings.push({ date: dateLabel || `Booking ${totalBooked}`, desk });
+
+        if (attempt < filtered.length - 1) {
+          await sleep(DELAY_BETWEEN_CLICKS);
+        }
+      }
+    } else {
+      await log('info', `Week ${week + 1}: no buttons match selected days — advancing anyway.`);
+    }
+
+    if (week < MAX_WEEKS - 1) {
+      const nextBtn = findNextWeekButton();
+      if (!nextBtn) {
+        await log('info', 'No next-week button found — stopping paging.');
+        break;
+      }
+      await log('info', `Advancing to week ${week + 2}…`);
+      nextBtn.click();
+      await sleep(500);
+      await waitFor(() => findScheduleButtons().length > 0 ? true : null, 10_000, 300);
+      await sleep(800);
     }
   }
 
-  await log('success', `All done — ${booked} desk(s) scheduled.`);
+  await log('success', `All done — ${totalBooked} desk(s) scheduled.`);
   try {
-    await chrome.runtime.sendMessage({ type: 'BOOKING_DONE', total: booked, bookings });
+    await chrome.runtime.sendMessage({ type: 'BOOKING_DONE', total: totalBooked, bookings: allBookings });
   } catch { /* background SW may have cycled */ }
+}
+
+/* ── Map booking — feature ID resolution ─────────────────────────────── */
+
+const MAP_MARKER_WAIT    = 15_000;
+const MAP_POPUP_WAIT     = 8_000;
+const MAP_VERIFY_DELAY   = 3_000;
+
+async function resolveFeatureId(seatName) {
+  await log('info', `Resolving feature ID for "${seatName}" via map search…`);
+
+  // Find the search input — Ember renders it as role="searchbox" or a plain input
+  const searchEl = await waitFor(
+    () =>
+      document.querySelector('[role="searchbox"]') ||
+      document.querySelector('input[type="search"]') ||
+      document.querySelector('input[placeholder*="Search" i]'),
+    15_000, 300
+  );
+
+  if (!searchEl) throw new Error('Map search box not found');
+  const input = searchEl.tagName === 'INPUT' ? searchEl : searchEl.querySelector('input');
+  if (!input) throw new Error('Map search input not found inside searchbox element');
+
+  input.focus();
+  input.value = '';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  await sleep(200);
+
+  for (const ch of seatName) {
+    input.value += ch;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keyup',   { key: ch, bubbles: true }));
+    await sleep(80);
+  }
+
+  await log('info', `Typed "${seatName}" — waiting for search results…`);
+
+  const resultBtn = await waitFor(() => {
+    const btns = document.querySelectorAll('[data-test-search-result-resource]');
+    for (const btn of btns) {
+      if (btn.textContent.includes(seatName)) return btn;
+    }
+    return null;
+  }, 8_000, 200);
+
+  if (!resultBtn) throw new Error(`No search result found for seat "${seatName}"`);
+
+  const prevHref = location.href;
+  resultBtn.click();
+
+  const newHref = await waitFor(() => {
+    const h = location.href;
+    if (h !== prevHref && h.includes('selectedFeatureId=')) return h;
+    return null;
+  }, 8_000, 200);
+
+  if (!newHref) throw new Error(`URL did not gain selectedFeatureId after selecting "${seatName}"`);
+
+  const m = newHref.match(/[?&]selectedFeatureId=(\d+)/);
+  if (!m) throw new Error(`Could not parse selectedFeatureId from URL: ${newHref}`);
+
+  return m[1];
+}
+
+/* ── Map booking — single-day seat booking ───────────────────────────── */
+
+async function bookSeatOnCurrentPage(featureId, seatName, dateStr) {
+  const markersReady = await waitFor(
+    () => (document.querySelectorAll('[data-test-feature-type="desk"]').length > 0 ? true : null),
+    MAP_MARKER_WAIT, 300
+  );
+
+  if (!markersReady) {
+    return { ok: false, error: `Desk markers never appeared on map for ${dateStr}` };
+  }
+
+  const marker = document.querySelector(`[data-test-feature-id="${featureId}"]`);
+  if (!marker) {
+    return { ok: false, error: `Seat ${seatName} (id=${featureId}) not found on map` };
+  }
+
+  marker.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  await sleep(200);
+  marker.click();
+
+  const popup = await waitFor(
+    () => document.querySelector('.leaflet-popup-content') || null,
+    MAP_POPUP_WAIT, 200
+  );
+
+  if (!popup) {
+    return { ok: false, error: `No popup appeared after clicking ${seatName}` };
+  }
+
+  const text = popup.innerText || popup.textContent || '';
+
+  if (text.includes('Unavailable to book')) {
+    return { ok: false, error: `${seatName} is not in your neighbourhood` };
+  }
+  if (text.includes('Scheduled')) {
+    return { ok: false, error: `${seatName} is already booked on ${dateStr}` };
+  }
+  if (!text.includes('Available')) {
+    return { ok: false, error: `${seatName} shows unexpected popup state: ${text.slice(0, 80).replace(/\n/g, ' ')}` };
+  }
+
+  const bookBtn = popup.querySelector('[data-test-book-desk-button]')
+    || document.querySelector('[data-test-book-desk-button]');
+  if (!bookBtn) {
+    return { ok: false, error: `"Book Desk" button not found in popup` };
+  }
+
+  bookBtn.click();
+  await sleep(MAP_VERIFY_DELAY);
+
+  const popupAfter = document.querySelector('.leaflet-popup-content');
+  if (!popupAfter) return { ok: true };
+
+  const textAfter = popupAfter.innerText || popupAfter.textContent || '';
+  if (textAfter.includes('Scheduled')) return { ok: true };
+  if (textAfter.includes('Available')) {
+    return { ok: false, error: `Booking failed — popup still shows Available after clicking Book Desk` };
+  }
+
+  return { ok: true };
 }
 
 /* ── Message listener ────────────────────────────────────────────────── */
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message.type === 'START_BOOKING') {
-    sendResponse({ received: true });
-    runBulkBooking(message.selectedDays || [1, 2, 3, 4, 5]).catch(async (err) => {
-      await log('error', `Unhandled error: ${err.message}`);
-      try {
-        await chrome.runtime.sendMessage({
-          type: 'BOOKING_ERROR',
-          message: `Unhandled error: ${err.message}`,
-        });
-      } catch { /* */ }
-    });
+  switch (message.type) {
+    case 'START_BOOKING':
+      sendResponse({ received: true });
+      runBulkBooking(message.selectedDays || [1, 2, 3, 4, 5]).catch(async (err) => {
+        await log('error', `Unhandled error: ${err.message}`);
+        try {
+          await chrome.runtime.sendMessage({ type: 'BOOKING_ERROR', message: `Unhandled error: ${err.message}` });
+        } catch { /* */ }
+      });
+      break;
+
+    case 'RESOLVE_SEAT':
+      sendResponse({ received: true });
+      resolveFeatureId(message.seatName)
+        .then((featureId) => chrome.runtime.sendMessage({ type: 'SEAT_RESULT', featureId }))
+        .catch((err) => chrome.runtime.sendMessage({ type: 'SEAT_RESULT', error: err.message }).catch(() => {}));
+      break;
+
+    case 'BOOK_SEAT':
+      sendResponse({ received: true });
+      bookSeatOnCurrentPage(message.featureId, message.seatName, message.dateStr)
+        .then((result) => chrome.runtime.sendMessage({ type: 'SEAT_RESULT', ...result }))
+        .catch((err) => chrome.runtime.sendMessage({ type: 'SEAT_RESULT', ok: false, error: err.message }).catch(() => {}));
+      break;
   }
   return true;
 });
