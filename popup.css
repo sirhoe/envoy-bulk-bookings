@@ -188,4 +188,14 @@ body {
 .log-level-warn    { color: #f9e2af; }
 .log-level-error   { color: #f38ba8; }
 
+/* ── Mode badge ─────────────────────────────────────────────────────── */
+.mode-badge {
+  padding: 4px 14px;
+  font-size: 11px;
+  background: #f3f4f6;
+  border-bottom: 1px solid #e5e7eb;
+  color: #6b7280;
+}
+.mode-badge.mode-specific { background: #eff6ff; color: #2563eb; }
+
 .hidden { display: none !important; }

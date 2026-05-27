@@ -39,6 +39,34 @@
 
         <button id="save-btn" class="btn-primary" type="button">Save</button>
       </div>
+
+      <div class="options-section">
+        <div class="options-section-title">Booking Mode</div>
+        <p class="options-hint">
+          Auto-assign lets Envoy pick any available desk. Specific seat books a named desk via the Map page.
+        </p>
+
+        <div class="field-group">
+          <label class="field-label">Mode</label>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" name="bookingMode" id="mode-auto" value="auto" />
+              Auto-assign
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="bookingMode" id="mode-map" value="map" />
+              Specific seat
+            </label>
+          </div>
+        </div>
+
+        <div id="seat-field" class="field-group hidden">
+          <label class="field-label" for="preferred-seat">Preferred Seat</label>
+          <input id="preferred-seat" type="text" class="field-input"
+                 placeholder="C31" autocomplete="off" maxlength="20" />
+          <p class="options-hint">Enter the seat name exactly as shown on the Envoy map (e.g. C31, B05).</p>
+        </div>
+      </div>
     </div>
 
   </div>

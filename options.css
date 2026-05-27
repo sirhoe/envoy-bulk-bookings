@@ -74,3 +74,22 @@ body {
   border-color: #4f46e5;
   background: white;
 }
+
+.radio-group {
+  display: flex;
+  gap: 16px;
+}
+
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #374151;
+  cursor: pointer;
+}
+
+.radio-label input[type="radio"] {
+  accent-color: #4f46e5;
+  cursor: pointer;
+}

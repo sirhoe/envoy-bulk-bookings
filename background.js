@@ -22,6 +22,13 @@ const MAP_BOOKING_TIMEOUT = 30_000; // ms to wait for bookSeatOnCurrentPage
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+function toLocalDateStr(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 /* ── Daily scheduling helpers ────────────────────────────────────────── */
 
 function getTodayString() {
@@ -179,8 +186,9 @@ async function closeTab(tabId) {
 let activeTabId = null;
 let pendingSelectedDays = [1, 2, 3, 4, 5];
 
-// Resolver slot for async replies from content script (SEAT_RESULT)
+// Resolver slots for async replies from content script
 let seatResultResolver = null;
+let scanResultResolver = null;
 
 function waitForSeatResult(timeout) {
   return new Promise((resolve, reject) => {
@@ -191,6 +199,19 @@ function waitForSeatResult(timeout) {
     seatResultResolver = (msg) => {
       clearTimeout(timer);
       resolve(msg);
+    };
+  });
+}
+
+function waitForScanResult(timeout) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      scanResultResolver = null;
+      resolve([]); // timeout is non-fatal — proceed without pre-filter
+    }, timeout);
+    scanResultResolver = (bookedDates) => {
+      clearTimeout(timer);
+      resolve(bookedDates);
     };
   });
 }
@@ -228,6 +249,30 @@ function getDayTimestamps(date) {
 
 function formatDate(date) {
   return date.toLocaleDateString('en-AU', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+async function scanScheduleForBookedDates(tabId, targetDates) {
+  try {
+    await chrome.tabs.update(tabId, { url: SCHEDULE_URL });
+    await waitForTabComplete(tabId, TAB_LOAD_TIMEOUT);
+    await sleep(2500);
+
+    const loaded = await chrome.tabs.get(tabId);
+    if (isLoginUrl(loaded.url)) {
+      await attemptAutoLogin(tabId);
+      await chrome.tabs.update(tabId, { url: SCHEDULE_URL });
+      await waitForTabComplete(tabId, TAB_LOAD_TIMEOUT);
+      await sleep(2500);
+    }
+
+    await chrome.tabs.sendMessage(tabId, { type: 'SCAN_SCHEDULE', targetDates });
+    const bookedDates = await waitForScanResult(60_000);
+    await addLog('info', `Schedule scan complete — ${bookedDates.length} date(s) already booked.`);
+    return bookedDates;
+  } catch (err) {
+    await addLog('warn', `Schedule scan failed (${err.message}) — proceeding without pre-filter.`);
+    return [];
+  }
 }
 
 async function runMapFlow(selectedDays, preferredSeat, cachedFeatureId, locationId) {
@@ -293,11 +338,28 @@ async function runMapFlow(selectedDays, preferredSeat, cachedFeatureId, location
     }
   }
 
-  await setState({ status: 'running', total: dates.length, current: 0 });
+  // Pre-scan schedule page to skip already-booked dates
+  await addLog('info', 'Scanning schedule page for existing bookings…');
+  const targetDateStrings = dates.map(toLocalDateStr);
+  const bookedDates = await scanScheduleForBookedDates(activeTabId, targetDateStrings);
+  const bookedSet = new Set(bookedDates);
+  const datesToBook = dates.filter((d) => !bookedSet.has(toLocalDateStr(d)));
+  const skipped = dates.length - datesToBook.length;
+  if (skipped > 0) await addLog('info', `Skipping ${skipped} already-booked date(s).`);
+
+  if (datesToBook.length === 0) {
+    await setState({ status: 'done', total: 0, current: 0 });
+    await addLog('info', 'All upcoming dates are already booked — nothing to do.');
+    if (activeTabId) { await closeTab(activeTabId); activeTabId = null; }
+    showBookingNotification('done', 0);
+    return;
+  }
+
+  await setState({ status: 'running', total: datesToBook.length, current: 0 });
   let booked = 0;
 
-  for (let i = 0; i < dates.length; i++) {
-    const date = dates[i];
+  for (let i = 0; i < datesToBook.length; i++) {
+    const date = datesToBook[i];
     const { selectedTime, selectedEndTime } = getDayTimestamps(date);
     const mapUrl = `${MAP_BASE_URL}/${locationId}?selectedTime=${selectedTime}&selectedEndTime=${selectedEndTime}&selectedFeatureId=${seatFeatureId}`;
     const dateStr = formatDate(date);
@@ -329,8 +391,8 @@ async function runMapFlow(selectedDays, preferredSeat, cachedFeatureId, location
     await setState({ current: i + 1 });
   }
 
-  await setState({ status: 'done', current: dates.length, total: dates.length });
-  await addLog('success', `Done — ${booked}/${dates.length} day(s) booked for "${preferredSeat}".`);
+  await setState({ status: 'done', current: datesToBook.length, total: datesToBook.length });
+  await addLog('success', `Done — ${booked}/${datesToBook.length} day(s) booked for "${preferredSeat}".`);
   if (activeTabId) { await closeTab(activeTabId); activeTabId = null; }
   await chrome.storage.local.set({ lastRunDate: getTodayString() });
   showBookingNotification('done', booked);
@@ -487,6 +549,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (seatResultResolver) {
           seatResultResolver(message);
           seatResultResolver = null;
+        }
+        sendResponse({ ok: true });
+        break;
+      }
+
+      case 'SCHEDULE_SCAN_RESULT': {
+        if (scanResultResolver) {
+          scanResultResolver(message.bookedDates || []);
+          scanResultResolver = null;
         }
         sendResponse({ ok: true });
         break;

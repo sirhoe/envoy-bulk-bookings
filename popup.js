@@ -8,6 +8,7 @@ const logBody        = document.getElementById('log-body');
 const clearLogBtn    = document.getElementById('clear-log-btn');
 const summarySection = document.getElementById('summary-section');
 const summaryBody    = document.getElementById('summary-body');
+const modeBadge      = document.getElementById('mode-badge');
 
 /* ── Log rendering ──────────────────────────────────────────────────── */
 
@@ -105,16 +106,28 @@ function showMsg(type, text) {
 
 /* ── Bootstrap ──────────────────────────────────────────────────────── */
 
+function updateModeBadge(bookingMode, preferredSeat) {
+  if (bookingMode === 'map' && preferredSeat) {
+    modeBadge.textContent = `Specific seat: ${preferredSeat}`;
+    modeBadge.className = 'mode-badge mode-specific';
+  } else {
+    modeBadge.textContent = 'Auto-assign';
+    modeBadge.className = 'mode-badge mode-auto';
+  }
+}
+
 // Load current state and saved day selection when popup opens
 (async () => {
   try {
-    const [state, { selectedDays }] = await Promise.all([
+    const [state, { selectedDays }, { bookingMode = 'auto', preferredSeat = '' }] = await Promise.all([
       chrome.runtime.sendMessage({ type: 'GET_STATE' }),
       chrome.storage.local.get({ selectedDays: [1, 2, 3, 4, 5] }),
+      chrome.storage.local.get(['bookingMode', 'preferredSeat']),
     ]);
     document.querySelectorAll('.day-chip').forEach((chip) => {
       if (!selectedDays.includes(+chip.dataset.day)) chip.classList.remove('active');
     });
+    updateModeBadge(bookingMode, preferredSeat);
     if (state) applyState(state);
   } catch { /* service worker may not be running yet */ }
 })();
@@ -132,6 +145,11 @@ document.querySelectorAll('.day-chip').forEach((chip) => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'session' && changes.envoy_booking) {
     applyState(changes.envoy_booking.newValue);
+  }
+  if (area === 'local' && (changes.bookingMode || changes.preferredSeat)) {
+    chrome.storage.local.get(['bookingMode', 'preferredSeat']).then(
+      ({ bookingMode = 'auto', preferredSeat = '' }) => updateModeBadge(bookingMode, preferredSeat)
+    );
   }
 });
 

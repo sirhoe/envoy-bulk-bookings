@@ -169,6 +169,74 @@ function findNextWeekButton() {
   return iconOnly.length >= 1 ? iconOnly[iconOnly.length - 1] : null;
 }
 
+/* ── Schedule page scanner ───────────────────────────────────────────── */
+
+function toLocalDateStr(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function parseScheduleDateStr(text) {
+  const thisYear = new Date().getFullYear();
+  const m = text.match(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2})\b/i);
+  if (m) {
+    const d = new Date(`${m[0]} ${thisYear}`);
+    if (!isNaN(d)) return toLocalDateStr(d);
+  }
+  const iso = text.match(/\d{4}-\d{2}-\d{2}/);
+  if (iso) return iso[0];
+  return null;
+}
+
+function findDateInAncestors(el, maxDepth = 8) {
+  let node = el;
+  for (let i = 0; i < maxDepth && node; i++) {
+    const dateStr = parseScheduleDateStr(node.textContent || '');
+    if (dateStr) return dateStr;
+    node = node.parentElement;
+  }
+  return null;
+}
+
+async function scanScheduleForBooked(targetDates) {
+  const targetSet = new Set(targetDates);
+  const bookedSet = new Set();
+  const MAX_SCAN_WEEKS = 5;
+
+  for (let week = 0; week < MAX_SCAN_WEEKS; week++) {
+    await sleep(500);
+
+    // Elements whose sole visible text is a booked-status label
+    const scheduledEls = Array.from(document.querySelectorAll('*')).filter((el) => {
+      if (el.children.length > 2) return false;
+      const text = (el.textContent || '').trim();
+      return text === 'Scheduled' || text === 'Booked';
+    });
+
+    for (const el of scheduledEls) {
+      const dateStr = findDateInAncestors(el);
+      if (dateStr && targetSet.has(dateStr)) {
+        bookedSet.add(dateStr);
+      }
+    }
+
+    if (week < MAX_SCAN_WEEKS - 1) {
+      const nextBtn = findNextWeekButton();
+      if (!nextBtn) break;
+      nextBtn.click();
+      await sleep(500);
+      await waitFor(
+        () => (findScheduleButtons().length > 0 || document.querySelector('[data-test-day-card]') ? true : null),
+        8_000, 300,
+      );
+    }
+  }
+
+  return [...bookedSet];
+}
+
 /* ── Main booking routine ────────────────────────────────────────────── */
 
 async function runBulkBooking(selectedDays = [1, 2, 3, 4, 5]) {
@@ -435,6 +503,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       bookSeatOnCurrentPage(message.featureId, message.seatName, message.dateStr)
         .then((result) => chrome.runtime.sendMessage({ type: 'SEAT_RESULT', ...result }))
         .catch((err) => chrome.runtime.sendMessage({ type: 'SEAT_RESULT', ok: false, error: err.message }).catch(() => {}));
+      break;
+
+    case 'SCAN_SCHEDULE':
+      sendResponse({ received: true });
+      scanScheduleForBooked(message.targetDates || [])
+        .then((bookedDates) => chrome.runtime.sendMessage({ type: 'SCHEDULE_SCAN_RESULT', bookedDates }))
+        .catch(() => chrome.runtime.sendMessage({ type: 'SCHEDULE_SCAN_RESULT', bookedDates: [] }).catch(() => {}));
       break;
   }
   return true;
